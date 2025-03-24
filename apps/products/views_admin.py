@@ -1,17 +1,17 @@
 from django.db.models import Sum, Count, Avg, F, Q
 from django.utils import timezone
 from django.core.exceptions import ValidationError
-from rest_framework import generics, status
+from rest_framework import generics, status, filters
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser
 from rest_framework.parsers import MultiPartParser, FormParser
-from django_filters import rest_framework as filters
+from django_filters import rest_framework as django_filters
 from PIL import Image
 import io
 import uuid
 import os
-from .models import Product, Category, ProductImage
+from .models import Product, Category, ProductImage, Brand
 from .serializers_admin import (
     AdminProductDetailSerializer,
     AdminProductImageSerializer,
@@ -95,9 +95,9 @@ class ImageUploadView(APIView):
             )
 
 
-class CategoryFilter(filters.FilterSet):
-    search = filters.CharFilter(field_name='name', lookup_expr='icontains')
-    parent = filters.UUIDFilter(field_name='parent__id')
+class CategoryFilter(django_filters.FilterSet):
+    search = django_filters.CharFilter(field_name='name', lookup_expr='icontains')
+    parent = django_filters.UUIDFilter(field_name='parent__id')
 
     class Meta:
         model = Category
@@ -108,12 +108,30 @@ class AdminCategoryListView(generics.ListCreateAPIView):
     queryset = Category.objects.all()
     serializer_class = AdminCategorySerializer
     permission_classes = [IsAdminUser]
-    filter_backends = [filters.DjangoFilterBackend]
+    filter_backends = [django_filters.DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = CategoryFilter
-    pagination_class = None  # Отключаем пагинацию для списка категорий
-
+    search_fields = ['name', 'slug']
+    ordering_fields = ['name', 'created_at', 'updated_at']
+    ordering = ['name']  # Сортировка по умолчанию
+    
     def get_queryset(self):
-        return super().get_queryset().select_related('parent')
+        # Если запрашиваются все категории без пагинации, отключаем её
+        no_pagination = self.request.query_params.get('no_pagination', False)
+        if no_pagination and no_pagination.lower() == 'true':
+            self.pagination_class = None
+            
+        return super().get_queryset().select_related('parent').prefetch_related('children')
+    
+    def create(self, request, *args, **kwargs):
+        # Обработка multipart/form-data для загрузки изображений
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        
+    def perform_create(self, serializer):
+        serializer.save()
 
 
 class AdminCategorySelectView(generics.ListAPIView):
@@ -146,11 +164,11 @@ class AdminCategorySelectView(generics.ListAPIView):
         return categories
 
 
-class ProductFilter(filters.FilterSet):
-    min_price = filters.NumberFilter(field_name='price', lookup_expr='gte')
-    max_price = filters.NumberFilter(field_name='price', lookup_expr='lte')
-    category = filters.UUIDFilter(field_name='category__id')
-    status = filters.ChoiceFilter(
+class ProductFilter(django_filters.FilterSet):
+    min_price = django_filters.NumberFilter(field_name='price', lookup_expr='gte')
+    max_price = django_filters.NumberFilter(field_name='price', lookup_expr='lte')
+    category = django_filters.UUIDFilter(field_name='category__id')
+    status = django_filters.ChoiceFilter(
         choices=[('in_stock', 'In Stock'), ('out_of_stock', 'Out of Stock')],
         method='filter_status'
     )
@@ -170,7 +188,7 @@ class ProductFilter(filters.FilterSet):
 class AdminProductListView(generics.ListCreateAPIView):
     queryset = Product.objects.all()
     permission_classes = [IsAdminUser]
-    filter_backends = [filters.DjangoFilterBackend]
+    filter_backends = [django_filters.DjangoFilterBackend]
     filterset_class = ProductFilter
     parser_classes = [MultiPartParser, FormParser]
 
@@ -288,4 +306,42 @@ class DashboardView(APIView):
                 item['status']: item['count']
                 for item in orders_by_status
             }
-        }) 
+        })
+
+
+class AdminCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Category.objects.all()
+    serializer_class = AdminCategorySerializer
+    permission_classes = [IsAdminUser]
+    parser_classes = [MultiPartParser, FormParser]
+    
+    def get_queryset(self):
+        return super().get_queryset().select_related('parent').prefetch_related('children')
+    
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+    
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        
+        # Проверяем, есть ли связанные товары
+        if instance.products.exists():
+            return Response(
+                {"detail": "Невозможно удалить категорию, так как с ней связаны товары."},
+                status=status.HTTP_409_CONFLICT
+            )
+        
+        # Проверяем, есть ли подкатегории
+        if instance.children.exists():
+            return Response(
+                {"detail": "Невозможно удалить категорию, так как у неё есть подкатегории."},
+                status=status.HTTP_409_CONFLICT
+            )
+        
+        self.perform_destroy(instance)
+        return Response(status=status.HTTP_204_NO_CONTENT) 

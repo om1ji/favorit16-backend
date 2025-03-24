@@ -5,7 +5,8 @@ from .views_admin import (
     AdminProductDetailView,
     ImageUploadView,
     AdminCategoryListView,
-    AdminCategorySelectView
+    AdminCategorySelectView,
+    AdminCategoryDetailView
 )
 
 app_name = 'products-admin'
@@ -17,4 +18,5 @@ urlpatterns = [
     path('upload/image/', ImageUploadView.as_view(), name='admin-image-upload'),
     path('categories/', AdminCategoryListView.as_view(), name='admin-category-list'),
     path('categories/select/', AdminCategorySelectView.as_view(), name='admin-category-select'),
+    path('categories/<uuid:pk>/', AdminCategoryDetailView.as_view(), name='admin-category-detail'),
 ] 

@@ -23,6 +23,8 @@ class Brand(models.Model):
 class Category(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(_('name'), max_length=255)
+    slug = models.SlugField(_('slug'), max_length=255, unique=True, blank=True, null=True, 
+                          help_text=_('URL-friendly name, must be unique'))
     image = models.ImageField(_('image'), upload_to='categories/', blank=True, null=True)
     parent = models.ForeignKey('self', verbose_name=_('parent category'),
                              on_delete=models.CASCADE, null=True, blank=True,

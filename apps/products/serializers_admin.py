@@ -21,19 +21,36 @@ class AdminBrandSerializer(serializers.ModelSerializer):
 
 
 class AdminCategorySerializer(serializers.ModelSerializer):
+    image = serializers.SerializerMethodField()
+    parent = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all(), required=False, allow_null=True)
+    children = serializers.SerializerMethodField()
+
     class Meta:
         model = Category
-        fields = ('id', 'name', 'parent')
+        fields = ('id', 'name', 'slug', 'image', 'parent', 'children', 'created_at', 'updated_at')
+
+    def get_image(self, obj):
+        request = self.context.get('request')
+        if obj.image and request:
+            return request.build_absolute_uri(obj.image.url)
+        return None
+        
+    def get_children(self, obj):
+        children = obj.children.all()
+        if children:
+            return AdminCategorySerializer(children, many=True, context=self.context).data
+        return []
 
 
 class AdminCategorySelectSerializer(serializers.ModelSerializer):
     level = serializers.IntegerField(read_only=True)
     full_name = serializers.SerializerMethodField()
     children = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
 
     class Meta:
         model = Category
-        fields = ('id', 'name', 'level', 'full_name', 'children')
+        fields = ('id', 'name', 'slug', 'image', 'parent', 'level', 'full_name', 'children', 'created_at', 'updated_at')
 
     def get_full_name(self, obj):
         if not hasattr(obj, 'ancestors_names'):
@@ -43,7 +60,13 @@ class AdminCategorySelectSerializer(serializers.ModelSerializer):
     def get_children(self, obj):
         children = obj.children.all()
         if children:
-            return AdminCategorySelectSerializer(children, many=True).data
+            return AdminCategorySelectSerializer(children, many=True, context=self.context).data
+        return []
+        
+    def get_image(self, obj):
+        request = self.context.get('request')
+        if obj.image and request:
+            return request.build_absolute_uri(obj.image.url)
         return None
 
 

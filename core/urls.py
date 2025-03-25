@@ -22,6 +22,7 @@ schema_view = get_schema_view(
 )
 
 urlpatterns = [
+    # Django Admin interface
     path('admin/', admin.site.urls),
     
     # API documentation
@@ -30,7 +31,7 @@ urlpatterns = [
     path('redoc/', schema_view.with_ui('redoc', cache_timeout=0), name='schema-redoc'),
     
     # Admin API endpoints
-    path('admin/', include('apps.products.urls_admin')),
+    path('products-admin/', include('apps.products.urls_admin')),
     
     # Regular API endpoints
     path('users/', include('apps.users.urls')),

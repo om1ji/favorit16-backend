@@ -197,3 +197,105 @@ class AdminProductDetailSerializer(serializers.ModelSerializer):
         if obj.width and obj.profile and obj.diameter:
             return f"{obj.width}/{obj.profile} R{obj.diameter}"
         return None
+
+
+class AdminProductUpdateSerializer(serializers.ModelSerializer):
+    category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all())
+    brand = serializers.PrimaryKeyRelatedField(queryset=Brand.objects.all(), required=False, allow_null=True)
+    images = serializers.JSONField(required=False)  # JSON массив с информацией об изображениях
+    
+    class Meta:
+        model = Product
+        fields = (
+            'id',
+            'name',
+            'category',
+            'brand',
+            'price',
+            'old_price',
+            'description',
+            'in_stock',
+            'quantity',
+            'diameter',
+            'width',
+            'profile',
+            'images'
+        )
+        
+    def validate_images(self, value):
+        """Валидируем данные изображений"""
+        if not value:
+            return []
+            
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Images must be a list")
+            
+        # Проверяем формат каждого изображения
+        for img in value:
+            if not isinstance(img, dict):
+                raise serializers.ValidationError("Each image must be an object")
+                
+            if 'id' not in img:
+                raise serializers.ValidationError("Each image must have an id")
+                
+        return value
+    
+    def update(self, instance, validated_data):
+        # Обрабатываем изображения, если они переданы
+        images_data = validated_data.pop('images', [])
+        
+        # Обновляем остальные поля
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        
+        # Обрабатываем изображения
+        if images_data:
+            # Получаем текущие изображения продукта
+            current_images = {str(image.id): image for image in instance.images.all()}
+            new_image_ids = set()
+            feature_image = None
+            
+            for image_data in images_data:
+                image_id = image_data.get('id')
+                is_feature = image_data.get('is_feature', False)
+                alt_text = image_data.get('alt_text', '')
+                
+                try:
+                    # Пытаемся найти существующее изображение
+                    image = ProductImage.objects.get(id=image_id)
+                    
+                    # Привязываем изображение к продукту
+                    image.product = instance
+                    image.alt_text = alt_text
+                    image.is_feature = is_feature
+                    image.save()
+                    
+                    new_image_ids.add(str(image.id))
+                    
+                    # Запоминаем главное изображение
+                    if is_feature:
+                        feature_image = image
+                except (ProductImage.DoesNotExist, ValueError):
+                    # Пропускаем несуществующие изображения
+                    continue
+            
+            # Удаляем привязку к изображениям, которые больше не связаны с продуктом
+            images_to_remove = set(current_images.keys()) - new_image_ids
+            if images_to_remove:
+                ProductImage.objects.filter(id__in=images_to_remove).update(product=None)
+            
+            # Устанавливаем главное изображение
+            if feature_image:
+                # Сбрасываем is_feature у всех изображений, кроме выбранного
+                instance.images.exclude(id=feature_image.id).update(is_feature=False)
+                feature_image.is_feature = True
+                feature_image.save()
+            elif new_image_ids and not instance.images.filter(is_feature=True).exists():
+                # Если нет отмеченного главного изображения, используем первое
+                first_image = instance.images.first()
+                if first_image:
+                    first_image.is_feature = True
+                    first_image.save()
+        
+        return instance

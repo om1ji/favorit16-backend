@@ -43,6 +43,9 @@ class Category(models.Model):
 
 class ProductImage(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    product = models.ForeignKey('Product', verbose_name=_('product'), 
+                              on_delete=models.CASCADE, related_name='images',
+                              null=True, blank=True)
     image = models.ImageField(_('image'), upload_to='products/')
     alt_text = models.CharField(_('alternative text'), max_length=255, blank=True)
     is_feature = models.BooleanField(_('feature image'), default=False)
@@ -66,8 +69,6 @@ class Product(models.Model):
                                   validators=[MinValueValidator(0)], null=True, blank=True)
     category = models.ForeignKey(Category, verbose_name=_('category'),
                                on_delete=models.CASCADE, related_name='products')
-    images = models.ManyToManyField(ProductImage, verbose_name=_('images'),
-                                  related_name='products')
     in_stock = models.BooleanField(_('in stock'), default=True)
     quantity = models.PositiveIntegerField(_('quantity'), default=0)
     

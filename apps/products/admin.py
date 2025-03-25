@@ -4,9 +4,9 @@ from .models import Category, Product, ProductImage, Brand
 
 @admin.register(ProductImage)
 class ProductImageAdmin(admin.ModelAdmin):
-    list_display = ('id', 'alt_text', 'is_feature', 'created_at')
+    list_display = ('id', 'product', 'alt_text', 'is_feature', 'created_at')
     list_filter = ('is_feature', 'created_at')
-    search_fields = ('alt_text',)
+    search_fields = ('alt_text', 'product__name')
     ordering = ('-created_at',)
 
 
@@ -23,14 +23,10 @@ class ProductAdmin(admin.ModelAdmin):
     list_filter = ('category', 'brand', 'in_stock', 'diameter', 'created_at')
     search_fields = ('name', 'description', 'brand__name')
     ordering = ('-created_at',)
-    filter_horizontal = ('images',)
     
     fieldsets = (
         (None, {
             'fields': ('category', 'brand', 'name', 'description')
-        }),
-        ('Images', {
-            'fields': ('images',)
         }),
         ('Tire Specifications', {
             'fields': ('diameter', 'width', 'profile')

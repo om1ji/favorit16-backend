@@ -17,7 +17,8 @@ from .serializers_admin import (
     AdminProductImageSerializer,
     AdminCategorySerializer,
     AdminCategorySelectSerializer,
-    AdminProductCreateSerializer
+    AdminProductCreateSerializer,
+    AdminProductUpdateSerializer
 )
 from apps.ordering.models import Order, OrderItem
 
@@ -207,13 +208,18 @@ class AdminProductListView(generics.ListCreateAPIView):
 
 class AdminProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Product.objects.all()
-    serializer_class = AdminProductDetailSerializer
     permission_classes = [IsAdminUser]
     parser_classes = [MultiPartParser, FormParser]
 
+    def get_serializer_class(self):
+        if self.request.method in ['PUT', 'PATCH']:
+            return AdminProductUpdateSerializer
+        return AdminProductDetailSerializer
+
     def get_queryset(self):
         return super().get_queryset().select_related(
-            'category'
+            'category',
+            'brand'
         ).prefetch_related(
             'images'
         )

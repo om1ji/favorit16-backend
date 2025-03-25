@@ -227,6 +227,12 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
         if not value:
             return []
             
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                raise serializers.ValidationError("Images must be a valid JSON string")
+            
         if not isinstance(value, list):
             raise serializers.ValidationError("Images must be a list")
             
@@ -298,4 +304,13 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
                     first_image.is_feature = True
                     first_image.save()
         
+        # Возвращаем обновленный экземпляр продукта с сериализованными изображениями
+        # Используем DetailSerializer для полной сериализации всех полей
         return instance
+
+    def to_representation(self, instance):
+        """
+        Преобразуем объект в представление JSON.
+        Используем AdminProductDetailSerializer для полного представления.
+        """
+        return AdminProductDetailSerializer(instance, context=self.context).data

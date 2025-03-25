@@ -21,6 +21,7 @@ from .serializers_admin import (
     AdminProductUpdateSerializer
 )
 from apps.ordering.models import Order, OrderItem
+import json
 
 
 def validate_image_file(image_file):
@@ -223,6 +224,29 @@ class AdminProductDetailView(generics.RetrieveUpdateDestroyAPIView):
         ).prefetch_related(
             'images'
         )
+        
+    def update(self, request, *args, **kwargs):
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        
+        # Обработка данных в формате multipart/form-data
+        data = request.data.copy()
+        
+        # Если images передано как строка, преобразуем её в JSON
+        if 'images' in data and isinstance(data['images'], str):
+            try:
+                data['images'] = json.loads(data['images'])
+            except json.JSONDecodeError:
+                return Response(
+                    {'detail': 'Invalid JSON for images field'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        serializer = self.get_serializer(instance, data=data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        
+        return Response(serializer.data)
 
     def handle_exception(self, exc):
         if isinstance(exc, Product.DoesNotExist):

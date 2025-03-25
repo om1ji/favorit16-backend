@@ -22,6 +22,7 @@ from .serializers_admin import (
 )
 from apps.ordering.models import Order, OrderItem
 import json
+from rest_framework import serializers
 
 
 def validate_image_file(image_file):
@@ -231,22 +232,49 @@ class AdminProductDetailView(generics.RetrieveUpdateDestroyAPIView):
         
         # Обработка данных в формате multipart/form-data
         data = request.data.copy()
+        content_type = request.content_type
+        print(f"Request content-type: {content_type}")
         
         # Если images передано как строка, преобразуем её в JSON
-        if 'images' in data and isinstance(data['images'], str):
-            try:
-                data['images'] = json.loads(data['images'])
-            except json.JSONDecodeError:
-                return Response(
-                    {'detail': 'Invalid JSON for images field'}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
+        if 'images' in data:
+            # Выводим информацию для отладки
+            print(f"Images data type: {type(data['images'])}")
+            print(f"Images data: {data['images']}")
+            
+            if isinstance(data['images'], str):
+                try:
+                    # Удаляем лишние пробелы
+                    images_str = data['images'].strip()
+                    
+                    # Если это multipart/form-data, то строка может содержать экранированные кавычки
+                    if "multipart/form-data" in content_type:
+                        images_str = images_str.replace('\\"', '"').replace("\\'", "'")
+                        if images_str.startswith('"') and images_str.endswith('"'):
+                            images_str = images_str[1:-1]  # Убираем обрамляющие кавычки
+                    
+                    data['images'] = json.loads(images_str)
+                    print(f"Parsed images: {data['images']}")
+                except json.JSONDecodeError as e:
+                    print(f"JSON decode error: {e}")
+                    return Response(
+                        {'detail': f'Invalid JSON for images field: {str(e)}', 'value': images_str}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
         
         serializer = self.get_serializer(instance, data=data, partial=partial)
-        serializer.is_valid(raise_exception=True)
+        
+        try:
+            serializer.is_valid(raise_exception=True)
+        except serializers.ValidationError as e:
+            print(f"Validation error: {e}")
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+            
         self.perform_update(serializer)
         
-        return Response(serializer.data)
+        # Устанавливаем правильный заголовок Content-Type для ответа
+        response = Response(serializer.data)
+        response['Content-Type'] = 'application/json'
+        return response
 
     def handle_exception(self, exc):
         if isinstance(exc, Product.DoesNotExist):

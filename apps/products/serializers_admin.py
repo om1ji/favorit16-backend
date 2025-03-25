@@ -224,22 +224,48 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
         
     def validate_images(self, value):
         """Валидируем данные изображений"""
+        print(f"validate_images received: {value}, type: {type(value)}")
+        
         if not value:
             return []
             
         if isinstance(value, str):
             try:
-                value = json.loads(value)
-            except json.JSONDecodeError:
-                raise serializers.ValidationError("Images must be a valid JSON string")
+                # Удаляем лишние пробелы и символы
+                value = value.strip()
+                # Проверяем, не является ли строка строковым представлением списка со строковыми элементами
+                if value.startswith("['") or value.startswith('["'):
+                    # Это строковое представление списка со строками, нужно преобразовать его в правильный JSON
+                    import ast
+                    value = ast.literal_eval(value)
+                else:
+                    value = json.loads(value)
+                print(f"Parsed JSON in validator: {value}")
+            except (json.JSONDecodeError, SyntaxError, ValueError) as e:
+                print(f"JSON/Value error in validator: {e}")
+                raise serializers.ValidationError(f"Images must be a valid JSON string: {str(e)}")
             
         if not isinstance(value, list):
+            print(f"Not a list: {value}")
             raise serializers.ValidationError("Images must be a list")
             
         # Проверяем формат каждого изображения
         for img in value:
-            if not isinstance(img, dict):
-                raise serializers.ValidationError("Each image must be an object")
+            if isinstance(img, str):
+                # Пытаемся интерпретировать строку как UUID
+                try:
+                    image_id = img
+                    # Проверяем существование изображения
+                    try:
+                        ProductImage.objects.get(id=image_id)
+                    except (ProductImage.DoesNotExist, ValueError):
+                        raise serializers.ValidationError(f"Invalid image ID: {image_id}")
+                    # Преобразуем в формат словаря
+                    img = {'id': image_id, 'is_feature': False, 'alt_text': ''}
+                except Exception as e:
+                    raise serializers.ValidationError(f"Invalid image format: {str(e)}")
+            elif not isinstance(img, dict):
+                raise serializers.ValidationError("Each image must be an object or UUID string")
                 
             if 'id' not in img:
                 raise serializers.ValidationError("Each image must have an id")
@@ -249,6 +275,7 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         # Обрабатываем изображения, если они переданы
         images_data = validated_data.pop('images', [])
+        print(f"Update method received images_data: {images_data}")
         
         # Обновляем остальные поля
         for attr, value in validated_data.items():
@@ -263,13 +290,25 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
             feature_image = None
             
             for image_data in images_data:
-                image_id = image_data.get('id')
-                is_feature = image_data.get('is_feature', False)
-                alt_text = image_data.get('alt_text', '')
+                # Если image_data - строка или словарь только с id, преобразуем его
+                if isinstance(image_data, str):
+                    image_id = image_data
+                    is_feature = False
+                    alt_text = ""
+                elif isinstance(image_data, dict) and len(image_data.keys()) == 1 and 'id' in image_data:
+                    image_id = image_data['id']
+                    is_feature = False
+                    alt_text = ""
+                else:
+                    image_id = image_data.get('id')
+                    is_feature = image_data.get('is_feature', False)
+                    alt_text = image_data.get('alt_text', '')
                 
                 try:
                     # Пытаемся найти существующее изображение
+                    print(f"Looking for image with ID: {image_id}")
                     image = ProductImage.objects.get(id=image_id)
+                    print(f"Found image: {image}")
                     
                     # Привязываем изображение к продукту
                     image.product = instance
@@ -282,13 +321,15 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
                     # Запоминаем главное изображение
                     if is_feature:
                         feature_image = image
-                except (ProductImage.DoesNotExist, ValueError):
+                except (ProductImage.DoesNotExist, ValueError) as e:
                     # Пропускаем несуществующие изображения
+                    print(f"Error with image {image_id}: {e}")
                     continue
             
             # Удаляем привязку к изображениям, которые больше не связаны с продуктом
             images_to_remove = set(current_images.keys()) - new_image_ids
             if images_to_remove:
+                print(f"Removing images: {images_to_remove}")
                 ProductImage.objects.filter(id__in=images_to_remove).update(product=None)
             
             # Устанавливаем главное изображение

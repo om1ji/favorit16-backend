@@ -112,6 +112,8 @@ class AdminProductCreateSerializer(serializers.ModelSerializer):
         if not value:
             return []
         
+        print(f"validate_images received: {value}, type: {type(value)}")
+        
         # Если value уже список (из JSON-запроса), используем его
         if isinstance(value, list):
             images_list = value
@@ -120,19 +122,39 @@ class AdminProductCreateSerializer(serializers.ModelSerializer):
             try:
                 images_list = json.loads(value)
                 if not isinstance(images_list, list):
-                    raise serializers.ValidationError("Must be a JSON array of UUIDs")
+                    raise serializers.ValidationError("Must be a JSON array of UUIDs or objects")
             except json.JSONDecodeError:
                 raise serializers.ValidationError("Must be a valid JSON array")
         else:
             raise serializers.ValidationError("Invalid format for images")
         
-        # Проверяем каждый UUID
-        for image_id in images_list:
-            try:
-                ProductImage.objects.get(id=image_id)
-            except (ProductImage.DoesNotExist, ValueError):
-                raise serializers.ValidationError(f"Invalid image ID: {image_id}")
-        return images_list
+        # Проверяем каждый элемент
+        result = []
+        for img in images_list:
+            # Если это строка, считаем ее ID изображения
+            if isinstance(img, str):
+                image_id = img
+                try:
+                    ProductImage.objects.get(id=image_id)
+                    result.append(img)  # Добавляем ID как есть
+                except (ProductImage.DoesNotExist, ValueError):
+                    raise serializers.ValidationError(f"Invalid image ID: {image_id}")
+            # Если это объект, извлекаем ID и проверяем
+            elif isinstance(img, dict):
+                if 'id' not in img:
+                    raise serializers.ValidationError("Each image object must have 'id' field")
+                
+                image_id = img['id']
+                try:
+                    ProductImage.objects.get(id=image_id)
+                    # Добавляем весь объект для последующей обработки
+                    result.append(img)
+                except (ProductImage.DoesNotExist, ValueError):
+                    raise serializers.ValidationError(f"Invalid image ID: {image_id}")
+            else:
+                raise serializers.ValidationError("Each image must be a string UUID or an object with id")
+            
+        return result
 
     def validate_images_metadata(self, value):
         if not value:
@@ -164,40 +186,68 @@ class AdminProductCreateSerializer(serializers.ModelSerializer):
         images = validated_data.pop('images', [])
         images_metadata = validated_data.pop('images_metadata', [])
         
+        print(f"create - images: {images}, type: {type(images)}")
+        
         # Создаем продукт
         product = super().create(validated_data)
         
         # Обрабатываем изображения
         if images:
+            # Преобразуем images_metadata в словарь по image_id для быстрого доступа
             metadata_dict = {
                 str(item['image_id']): item 
                 for item in images_metadata
             } if images_metadata else {}
             
             feature_image = None
-            for image_id in images:
+            
+            for image_item in images:
                 try:
-                    image = ProductImage.objects.get(id=image_id)
-                    metadata = metadata_dict.get(str(image_id), {})
+                    # Определяем тип данных изображения (строка ID или объект)
+                    if isinstance(image_item, str):
+                        # Если передан только ID
+                        image_id = image_item
+                        image = ProductImage.objects.get(id=image_id)
+                        # Берем метаданные из images_metadata
+                        metadata = metadata_dict.get(str(image_id), {})
+                        is_feature = metadata.get('is_feature', False)
+                        alt_text = metadata.get('alt_text', '')
+                    else:
+                        # Если передан объект с ID и другими полями
+                        image_id = image_item['id']
+                        image = ProductImage.objects.get(id=image_id)
+                        is_feature = image_item.get('is_feature', False)
+                        alt_text = image_item.get('alt_text', image.alt_text)
                     
+                    # Обновляем данные изображения
                     image.product = product
-                    image.alt_text = metadata.get('alt_text', '')
-                    image.is_feature = metadata.get('is_feature', False)
+                    image.alt_text = alt_text
+                    image.is_feature = is_feature
                     image.save()
                     
-                    if metadata.get('is_feature'):
+                    print(f"Added image to product: {image_id}, is_feature: {is_feature}")
+                    
+                    # Запоминаем главное изображение
+                    if is_feature:
                         feature_image = image
+                        
                 except ProductImage.DoesNotExist:
+                    print(f"Image not found: {image_id if isinstance(image_item, str) else image_item.get('id')}")
                     continue  # Пропускаем несуществующие изображения
             
             # Устанавливаем главное изображение
             if feature_image:
                 product.set_feature_image(feature_image)
+                print(f"Set feature image: {feature_image.id}")
             elif images:  # Если нет отмеченного главного изображения, используем первое
                 try:
-                    first_image = ProductImage.objects.get(id=images[0])
+                    first_image_data = images[0]
+                    first_image_id = first_image_data if isinstance(first_image_data, str) else first_image_data['id']
+                    first_image = ProductImage.objects.get(id=first_image_id)
                     product.set_feature_image(first_image)
+                    print(f"Set first image as feature: {first_image.id}")
                 except ProductImage.DoesNotExist:
+                    print(f"First image not found for feature")
                     pass
         
         return product

@@ -190,19 +190,28 @@ class AdminCategoryListView(generics.ListCreateAPIView):
         return super().get_queryset().select_related('parent').prefetch_related('children')
     
     def create(self, request, *args, **kwargs):
-        # Обработка multipart/form-data для загрузки изображений
+        # Обработка данных в зависимости от типа контента
         content_type = request.content_type
-        print(f"Category create - request content-type: {content_type}")
+        print(f"Product create - request content-type: {content_type}")
         
         # Копируем данные для обработки
         data = request.data.copy()
+        print(f"Product create - request data: {data}")
         
-        # Проверяем наличие файла изображения
-        if 'image' in request.FILES:
-            print(f"Received image file for category create: {request.FILES['image'].name}")
+        # Проверяем наличие и формат images
+        if 'images' in data:
+            print(f"Product create - images type: {type(data['images'])}")
+            print(f"Product create - images: {data['images']}")
         
         serializer = self.get_serializer(data=data, context=self.get_serializer_context())
-        serializer.is_valid(raise_exception=True)
+        
+        try:
+            serializer.is_valid(raise_exception=True)
+            print(f"Product create - validated data: {serializer.validated_data}")
+        except serializers.ValidationError as e:
+            print(f"Product create - validation error: {e}")
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         
@@ -284,6 +293,57 @@ class AdminProductListView(generics.ListCreateAPIView):
         ).prefetch_related(
             'images'
         )
+        
+    def create(self, request, *args, **kwargs):
+        # Обработка данных в зависимости от типа контента
+        content_type = request.content_type
+        print(f"Product create - request content-type: {content_type}")
+        
+        # Копируем данные для обработки
+        data = request.data.copy()
+        print(f"Product create - request data: {data}")
+        
+        # Проверяем наличие и формат images
+        if 'images' in data:
+            print(f"Product create - images type: {type(data['images'])}")
+            print(f"Product create - images: {data['images']}")
+            
+            # Если images пришло как строка, пытаемся распарсить её как JSON
+            if isinstance(data['images'], str):
+                try:
+                    # Удаляем лишние пробелы
+                    images_str = data['images'].strip()
+                    
+                    # Обрабатываем экранированные кавычки
+                    images_str = images_str.replace('\\"', '"').replace("\\'", "'")
+                    if images_str.startswith('"') and images_str.endswith('"'):
+                        images_str = images_str[1:-1]  # Убираем обрамляющие кавычки
+                    
+                    data['images'] = json.loads(images_str)
+                    print(f"Parsed images: {data['images']}")
+                except json.JSONDecodeError as e:
+                    print(f"JSON decode error: {e}")
+                    return Response(
+                        {'detail': f'Invalid JSON for images field: {str(e)}', 'value': images_str}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+        
+        serializer = self.get_serializer(data=data, context=self.get_serializer_context())
+        
+        try:
+            serializer.is_valid(raise_exception=True)
+            print(f"Product create - validated data: {serializer.validated_data}")
+        except serializers.ValidationError as e:
+            print(f"Product create - validation error: {e}")
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+        
+        self.perform_create(serializer)
+        headers = self.get_success_headers(serializer.data)
+        
+        # Устанавливаем заголовок Content-Type
+        response = Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        response['Content-Type'] = 'application/json'
+        return response
 
 
 class AdminProductDetailView(generics.RetrieveUpdateDestroyAPIView):

@@ -190,32 +190,17 @@ class AdminCategoryListView(generics.ListCreateAPIView):
         return super().get_queryset().select_related('parent').prefetch_related('children')
     
     def create(self, request, *args, **kwargs):
-        # Обработка данных в зависимости от типа контента
-        content_type = request.content_type
-        print(f"Product create - request content-type: {content_type}")
-        
-        # Копируем данные для обработки
         data = request.data.copy()
-        print(f"Product create - request data: {data}")
-        
-        # Проверяем наличие и формат images
-        if 'images' in data:
-            print(f"Product create - images type: {type(data['images'])}")
-            print(f"Product create - images: {data['images']}")
-        
         serializer = self.get_serializer(data=data, context=self.get_serializer_context())
         
         try:
             serializer.is_valid(raise_exception=True)
-            print(f"Product create - validated data: {serializer.validated_data}")
         except serializers.ValidationError as e:
-            print(f"Product create - validation error: {e}")
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
         
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
         
-        # Устанавливаем заголовок Content-Type
         response = Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
         response['Content-Type'] = 'application/json'
         return response
@@ -368,59 +353,36 @@ class AdminProductDetailView(generics.RetrieveUpdateDestroyAPIView):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         
-        # Обработка данных в зависимости от типа контента
         content_type = request.content_type
-        print(f"Product update - request content-type: {content_type}")
-        
-        # Копируем данные для модификации
         data = request.data.copy()
-        print(f"Request data: {data}")
         
-        # Если Content-Type = application/json
-        if 'application/json' in content_type:
-            print("Processing JSON request")
-            # JSON-запросы уже правильно обрабатываются DRF
-        # Если это multipart/form-data, нужна дополнительная обработка
-        elif 'multipart/form-data' in content_type:
-            print("Processing multipart/form-data request")
-            # Обрабатываем поле images если оно есть
+        if 'multipart/form-data' in content_type:
             if 'images' in data:
-                print(f"Images data type: {type(data['images'])}")
-                print(f"Images data: {data['images']}")
-                
-                # Если images пришло как строка, пытаемся распарсить её как JSON
                 if isinstance(data['images'], str):
                     try:
-                        # Удаляем лишние пробелы
                         images_str = data['images'].strip()
                         
-                        # Обрабатываем экранированные кавычки
                         images_str = images_str.replace('\\"', '"').replace("\\'", "'")
                         if images_str.startswith('"') and images_str.endswith('"'):
-                            images_str = images_str[1:-1]  # Убираем обрамляющие кавычки
+                            images_str = images_str[1:-1]
                         
                         data['images'] = json.loads(images_str)
-                        print(f"Parsed images: {data['images']}")
                     except json.JSONDecodeError as e:
-                        print(f"JSON decode error: {e}")
                         return Response(
                             {'detail': f'Invalid JSON for images field: {str(e)}', 'value': images_str}, 
                             status=status.HTTP_400_BAD_REQUEST
                         )
         
-        # Передаем контекст запроса в сериализатор
         context = self.get_serializer_context()
         serializer = self.get_serializer(instance, data=data, partial=partial, context=context)
         
         try:
             serializer.is_valid(raise_exception=True)
         except serializers.ValidationError as e:
-            print(f"Validation error: {e}")
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
             
         self.perform_update(serializer)
         
-        # Устанавливаем правильный заголовок Content-Type для ответа
         response = Response(serializer.data)
         response['Content-Type'] = 'application/json'
         return response

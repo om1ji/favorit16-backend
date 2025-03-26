@@ -116,19 +116,32 @@ class CategoryImageUploadView(APIView):
             # Валидируем файл
             validate_image_file(image_file)
             
-            # Создаем запись ProductImage в БД
+            # Сначала сохраняем изображение напрямую в ProductImage
+            # Это позволит сохранить файл с правильным путем через ImageField
+            # И вернуть правильный ID для использования в обновлении категории
             product_image = ProductImage.objects.create(
                 image=image_file,
                 alt_text=image_file.name
             )
             
-            # Получаем URL изображения с помощью сериализатора
-            request_context = {'request': request}
-            serializer = AdminProductImageSerializer(product_image, context=request_context)
+            # Получаем URL изображения
+            image_url = None
+            if request:
+                image_url = request.build_absolute_uri(product_image.image.url)
+            else:
+                image_url = product_image.image.url
+                
+            print(f"Uploaded category image, ID: {product_image.id}, Path: {product_image.image.name}, URL: {image_url}")
             
-            # Добавляем дополнительные поля для совместимости с предыдущей версией API
-            response_data = serializer.data.copy()
-            response_data['filename'] = image_file.name
+            # Формируем ответ
+            response_data = {
+                'id': str(product_image.id),
+                'image': image_url,
+                'thumbnail': image_url,
+                'alt_text': image_file.name,
+                'is_feature': False,
+                'filename': image_file.name
+            }
             
             # Устанавливаем заголовок Content-Type
             response = Response(response_data, status=status.HTTP_201_CREATED)
@@ -468,7 +481,7 @@ class AdminCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
         data = request.data.copy()
         print(f"Category update - request data: {data}")
         
-        # Проверяем наличие файла изображения или поля image_id
+        # Проверяем, есть ли файл изображения или поле image_id
         if 'image' in request.FILES:
             # Файл уже включен в data через request.data, дополнительная обработка не требуется
             print(f"Received image file: {request.FILES['image'].name}")
@@ -487,7 +500,19 @@ class AdminCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
             
         self.perform_update(serializer)
-        print(f"Category update - instance after update: {serializer.instance.image}")
+        
+        # Проверяем результат обновления
+        updated_instance = self.get_object()  # Получаем обновленный экземпляр из БД
+        if updated_instance.image:
+            image_url = None
+            request_context = self.get_serializer_context().get('request')
+            if request_context:
+                image_url = request_context.build_absolute_uri(updated_instance.image.url)
+            else:
+                image_url = updated_instance.image.url
+            print(f"Category updated with image: {updated_instance.image}, URL: {image_url}")
+        else:
+            print("Category updated without image")
         
         # Устанавливаем заголовок Content-Type
         response = Response(serializer.data)
@@ -532,18 +557,33 @@ class ProductImageUploadView(APIView):
             # Валидируем файл
             validate_image_file(image_file)
             
-            # Создаем запись в БД непосредственно с файлом изображения
+            # Создаем запись в БД напрямую с файлом изображения
             product_image = ProductImage.objects.create(
                 image=image_file,
                 alt_text=image_file.name
             )
             
             # Получаем URL изображения
-            request_context = {'request': request}
-            serializer = AdminProductImageSerializer(product_image, context=request_context)
+            image_url = None
+            if request:
+                image_url = request.build_absolute_uri(product_image.image.url)
+            else:
+                image_url = product_image.image.url
+                
+            print(f"Uploaded product image, ID: {product_image.id}, Path: {product_image.image.name}, URL: {image_url}")
+            
+            # Формируем ответ
+            response_data = {
+                'id': str(product_image.id),
+                'image': image_url,
+                'thumbnail': image_url,
+                'alt_text': image_file.name,
+                'is_feature': False,
+                'filename': image_file.name
+            }
             
             # Устанавливаем заголовок Content-Type
-            response = Response(serializer.data, status=status.HTTP_201_CREATED)
+            response = Response(response_data, status=status.HTTP_201_CREATED)
             response['Content-Type'] = 'application/json'
             return response
             

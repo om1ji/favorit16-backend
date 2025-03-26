@@ -1,9 +1,6 @@
 from rest_framework import serializers
 import json
 from .models import Product, Category, ProductImage, Brand
-from django.core.files.base import ContentFile
-from django.core.files.storage import default_storage
-import os
 
 
 class AdminProductImageSerializer(serializers.ModelSerializer):
@@ -437,25 +434,11 @@ class AdminCategoryUpdateSerializer(serializers.ModelSerializer):
                 image = ProductImage.objects.get(id=data['image_id'])
                 print(f"Found image with id {data['image_id']}: {image.image.url}")
                 
-                # Получаем имя файла и копируем в директорию категорий
-                from django.core.files.base import ContentFile
-                from django.core.files.storage import default_storage
-                import os
-                
-                # Открываем исходный файл
-                image_content = image.image.read()
-                
-                # Генерируем имя файла для категории
-                filename = os.path.basename(image.image.name)
-                new_path = f'categories/{filename}'
-                
-                # Сохраняем файл в директории категорий
-                path = default_storage.save(f'media/{new_path}', ContentFile(image_content))
-                print(f"Saved category image to: {path}")
-                
-                # Устанавливаем новый путь для поля image
+                # Вместо создания нового файла, просто копируем информацию о пути
+                # Прямое присваивание ImageField к полю категории
                 data.pop('image_id')
-                data['image'] = new_path
+                data['image'] = image.image
+                print(f"Using image path: {image.image}")
                 
             except ProductImage.DoesNotExist:
                 raise serializers.ValidationError({"image_id": "Изображение с указанным ID не найдено"})

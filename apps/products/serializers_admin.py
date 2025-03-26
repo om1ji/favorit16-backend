@@ -41,8 +41,10 @@ class AdminCategorySerializer(serializers.ModelSerializer):
 
     def get_image(self, obj):
         request = self.context.get('request')
-        if obj.image and request:
-            return request.build_absolute_uri(obj.image.url)
+        if obj.image:
+            if request:
+                return request.build_absolute_uri(obj.image.url)
+            return obj.image.url
         return None
         
     def get_children(self, obj):
@@ -75,16 +77,18 @@ class AdminCategorySelectSerializer(serializers.ModelSerializer):
         
     def get_image(self, obj):
         request = self.context.get('request')
-        if obj.image and request:
-            return request.build_absolute_uri(obj.image.url)
+        if obj.image:
+            if request:
+                return request.build_absolute_uri(obj.image.url)
+            return obj.image.url
         return None
 
 
 class AdminProductCreateSerializer(serializers.ModelSerializer):
     category = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all())
     brand = serializers.PrimaryKeyRelatedField(queryset=Brand.objects.all(), required=False)
-    images = serializers.CharField(required=False)  # Будем парсить вручную
-    images_metadata = serializers.CharField(required=False)  # Будем парсить вручную
+    images = serializers.JSONField(required=False)  # Принимает как строки, так и JSON
+    images_metadata = serializers.JSONField(required=False)  # Принимает как строки, так и JSON
 
     class Meta:
         model = Product
@@ -107,36 +111,54 @@ class AdminProductCreateSerializer(serializers.ModelSerializer):
     def validate_images(self, value):
         if not value:
             return []
-        try:
-            images_list = json.loads(value)
-            if not isinstance(images_list, list):
-                raise serializers.ValidationError("Must be a JSON array of UUIDs")
-            # Проверяем каждый UUID
-            for image_id in images_list:
-                try:
-                    ProductImage.objects.get(id=image_id)
-                except (ProductImage.DoesNotExist, ValueError):
-                    raise serializers.ValidationError(f"Invalid image ID: {image_id}")
-            return images_list
-        except json.JSONDecodeError:
-            raise serializers.ValidationError("Must be a valid JSON array")
+        
+        # Если value уже список (из JSON-запроса), используем его
+        if isinstance(value, list):
+            images_list = value
+        # Если value - строка, пытаемся преобразовать в JSON
+        elif isinstance(value, str):
+            try:
+                images_list = json.loads(value)
+                if not isinstance(images_list, list):
+                    raise serializers.ValidationError("Must be a JSON array of UUIDs")
+            except json.JSONDecodeError:
+                raise serializers.ValidationError("Must be a valid JSON array")
+        else:
+            raise serializers.ValidationError("Invalid format for images")
+        
+        # Проверяем каждый UUID
+        for image_id in images_list:
+            try:
+                ProductImage.objects.get(id=image_id)
+            except (ProductImage.DoesNotExist, ValueError):
+                raise serializers.ValidationError(f"Invalid image ID: {image_id}")
+        return images_list
 
     def validate_images_metadata(self, value):
         if not value:
             return []
-        try:
-            metadata_list = json.loads(value)
-            if not isinstance(metadata_list, list):
-                raise serializers.ValidationError("Must be a JSON array of objects")
-            # Проверяем структуру каждого объекта метаданных
-            for item in metadata_list:
-                if not isinstance(item, dict):
-                    raise serializers.ValidationError("Each item must be an object")
-                if 'image_id' not in item:
-                    raise serializers.ValidationError("Each item must have 'image_id'")
-            return metadata_list
-        except json.JSONDecodeError:
-            raise serializers.ValidationError("Must be a valid JSON array")
+        
+        # Если value уже список (из JSON-запроса), используем его
+        if isinstance(value, list):
+            metadata_list = value
+        # Если value - строка, пытаемся преобразовать в JSON
+        elif isinstance(value, str):
+            try:
+                metadata_list = json.loads(value)
+                if not isinstance(metadata_list, list):
+                    raise serializers.ValidationError("Must be a JSON array of objects")
+            except json.JSONDecodeError:
+                raise serializers.ValidationError("Must be a valid JSON array")
+        else:
+            raise serializers.ValidationError("Invalid format for images_metadata")
+        
+        # Проверяем структуру каждого объекта метаданных
+        for item in metadata_list:
+            if not isinstance(item, dict):
+                raise serializers.ValidationError("Each item must be an object")
+            if 'image_id' not in item:
+                raise serializers.ValidationError("Each item must have 'image_id'")
+        return metadata_list
 
     def create(self, validated_data):
         images = validated_data.pop('images', [])
@@ -172,7 +194,11 @@ class AdminProductCreateSerializer(serializers.ModelSerializer):
             if feature_image:
                 product.set_feature_image(feature_image)
             elif images:  # Если нет отмеченного главного изображения, используем первое
-                product.set_feature_image(images[0])
+                try:
+                    first_image = ProductImage.objects.get(id=images[0])
+                    product.set_feature_image(first_image)
+                except ProductImage.DoesNotExist:
+                    pass
         
         return product
 
@@ -374,3 +400,40 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
         Используем AdminProductDetailSerializer для полного представления.
         """
         return AdminProductDetailSerializer(instance, context=self.context).data
+
+
+class AdminCategoryUpdateSerializer(serializers.ModelSerializer):
+    parent = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all(), required=False, allow_null=True)
+    image = serializers.CharField(required=False, allow_null=True)
+    
+    class Meta:
+        model = Category
+        fields = ('id', 'name', 'slug', 'image', 'parent')
+    
+    def validate_image(self, value):
+        """Валидируем строку с путем к изображению"""
+        if not value:
+            return None
+            
+        # Если значение - строка с путем к изображению
+        if isinstance(value, str):
+            # Если путь начинается с /media/, убираем этот префикс
+            if value.startswith('/media/'):
+                return value[7:]  # Убираем '/media/' из пути
+            return value
+            
+        return value
+        
+    def update(self, instance, validated_data):
+        # Обновляем поля категории
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+            
+        instance.save()
+        return instance
+        
+    def to_representation(self, instance):
+        """
+        Используем полный сериализатор для отображения результата.
+        """
+        return AdminCategorySerializer(instance, context=self.context).data

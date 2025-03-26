@@ -18,7 +18,8 @@ from .serializers_admin import (
     AdminCategorySerializer,
     AdminCategorySelectSerializer,
     AdminProductCreateSerializer,
-    AdminProductUpdateSerializer
+    AdminProductUpdateSerializer,
+    AdminCategoryUpdateSerializer
 )
 from apps.ordering.models import Order, OrderItem
 import json
@@ -98,6 +99,60 @@ class ImageUploadView(APIView):
             )
 
 
+class CategoryImageUploadView(APIView):
+    permission_classes = [IsAdminUser]
+    parser_classes = [MultiPartParser, FormParser]
+    
+    def post(self, request):
+        if 'image' not in request.FILES:
+            return Response(
+                {'detail': 'No image file provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        image_file = request.FILES['image']
+        
+        try:
+            # Валидируем файл
+            validate_image_file(image_file)
+            
+            # Создаем временный UUID для категории
+            temp_uuid = str(uuid.uuid4())
+            
+            # Создаем путь к временному файлу
+            image_path = f'categories/{temp_uuid}_{image_file.name}'
+            
+            # Вручную сохраняем файл в поле модели
+            from django.core.files.storage import default_storage
+            from django.core.files.base import ContentFile
+            
+            path = default_storage.save(f'media/{image_path}', ContentFile(image_file.read()))
+            
+            # Возвращаем информацию о файле в формате, совместимом с JSON
+            image_url = f'/media/{image_path}'
+            
+            # Устанавливаем заголовок Content-Type
+            response = Response({
+                'image': image_url,
+                'filename': image_file.name,
+                # Дополнительные поля для прямого использования в категории
+                'image_path': image_url
+            }, status=status.HTTP_201_CREATED)
+            response['Content-Type'] = 'application/json'
+            return response
+            
+        except ValidationError as e:
+            return Response(
+                {'detail': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {'detail': f'Error processing image: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 class CategoryFilter(django_filters.FilterSet):
     search = django_filters.CharFilter(field_name='name', lookup_expr='icontains')
     parent = django_filters.UUIDFilter(field_name='parent__id')
@@ -116,6 +171,7 @@ class AdminCategoryListView(generics.ListCreateAPIView):
     search_fields = ['name', 'slug']
     ordering_fields = ['name', 'created_at', 'updated_at']
     ordering = ['name']  # Сортировка по умолчанию
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     
     def get_queryset(self):
         # Если запрашиваются все категории без пагинации, отключаем её
@@ -127,11 +183,25 @@ class AdminCategoryListView(generics.ListCreateAPIView):
     
     def create(self, request, *args, **kwargs):
         # Обработка multipart/form-data для загрузки изображений
-        serializer = self.get_serializer(data=request.data)
+        content_type = request.content_type
+        print(f"Category create - request content-type: {content_type}")
+        
+        # Копируем данные для обработки
+        data = request.data.copy()
+        
+        # Проверяем наличие файла изображения
+        if 'image' in request.FILES:
+            print(f"Received image file for category create: {request.FILES['image'].name}")
+        
+        serializer = self.get_serializer(data=data, context=self.get_serializer_context())
         serializer.is_valid(raise_exception=True)
         self.perform_create(serializer)
         headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        
+        # Устанавливаем заголовок Content-Type
+        response = Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+        response['Content-Type'] = 'application/json'
+        return response
         
     def perform_create(self, serializer):
         serializer.save()
@@ -193,7 +263,7 @@ class AdminProductListView(generics.ListCreateAPIView):
     permission_classes = [IsAdminUser]
     filter_backends = [django_filters.DjangoFilterBackend]
     filterset_class = ProductFilter
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_serializer_class(self):
         if self.request.method == 'POST':
@@ -232,39 +302,43 @@ class AdminProductDetailView(generics.RetrieveUpdateDestroyAPIView):
         
         # Обработка данных в зависимости от типа контента
         content_type = request.content_type
-        print(f"Request content-type: {content_type}")
+        print(f"Product update - request content-type: {content_type}")
         
         # Копируем данные для модификации
         data = request.data.copy()
+        print(f"Request data: {data}")
         
-        # Если Content-Type = application/json, то данные уже в формате JSON
+        # Если Content-Type = application/json
         if 'application/json' in content_type:
-            # Для JSON-формата нам не нужно дополнительно обрабатывать данные
-            pass
-        # Если это multipart/form-data, обрабатываем поле images
-        elif 'multipart/form-data' in content_type and 'images' in data:
-            # Выводим информацию для отладки
-            print(f"Images data type: {type(data['images'])}")
-            print(f"Images data: {data['images']}")
-            
-            if isinstance(data['images'], str):
-                try:
-                    # Удаляем лишние пробелы
-                    images_str = data['images'].strip()
-                    
-                    # Обрабатываем экранированные кавычки
-                    images_str = images_str.replace('\\"', '"').replace("\\'", "'")
-                    if images_str.startswith('"') and images_str.endswith('"'):
-                        images_str = images_str[1:-1]  # Убираем обрамляющие кавычки
-                    
-                    data['images'] = json.loads(images_str)
-                    print(f"Parsed images: {data['images']}")
-                except json.JSONDecodeError as e:
-                    print(f"JSON decode error: {e}")
-                    return Response(
-                        {'detail': f'Invalid JSON for images field: {str(e)}', 'value': images_str}, 
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
+            print("Processing JSON request")
+            # JSON-запросы уже правильно обрабатываются DRF
+        # Если это multipart/form-data, нужна дополнительная обработка
+        elif 'multipart/form-data' in content_type:
+            print("Processing multipart/form-data request")
+            # Обрабатываем поле images если оно есть
+            if 'images' in data:
+                print(f"Images data type: {type(data['images'])}")
+                print(f"Images data: {data['images']}")
+                
+                # Если images пришло как строка, пытаемся распарсить её как JSON
+                if isinstance(data['images'], str):
+                    try:
+                        # Удаляем лишние пробелы
+                        images_str = data['images'].strip()
+                        
+                        # Обрабатываем экранированные кавычки
+                        images_str = images_str.replace('\\"', '"').replace("\\'", "'")
+                        if images_str.startswith('"') and images_str.endswith('"'):
+                            images_str = images_str[1:-1]  # Убираем обрамляющие кавычки
+                        
+                        data['images'] = json.loads(images_str)
+                        print(f"Parsed images: {data['images']}")
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error: {e}")
+                        return Response(
+                            {'detail': f'Invalid JSON for images field: {str(e)}', 'value': images_str}, 
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
         
         # Передаем контекст запроса в сериализатор
         context = self.get_serializer_context()
@@ -376,20 +450,49 @@ class DashboardView(APIView):
 
 class AdminCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Category.objects.all()
-    serializer_class = AdminCategorySerializer
     permission_classes = [IsAdminUser]
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     
+    def get_serializer_class(self):
+        if self.request.method in ['PUT', 'PATCH']:
+            return AdminCategoryUpdateSerializer
+        return AdminCategorySerializer
+
     def get_queryset(self):
         return super().get_queryset().select_related('parent').prefetch_related('children')
     
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
+        
+        # Получаем информацию о типе запроса
+        content_type = request.content_type
+        print(f"Category update - request content-type: {content_type}")
+        
+        # Копируем данные для обработки
+        data = request.data.copy()
+        
+        # Проверяем наличие файла изображения
+        if 'image' in request.FILES:
+            # Файл уже включен в data через request.data, дополнительная обработка не требуется
+            print(f"Received image file: {request.FILES['image'].name}")
+        
+        # Передаем контекст запроса в сериализатор
+        context = self.get_serializer_context()
+        serializer = self.get_serializer(instance, data=data, partial=partial, context=context)
+        
+        try:
+            serializer.is_valid(raise_exception=True)
+        except serializers.ValidationError as e:
+            print(f"Category update - validation error: {e}")
+            return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
+            
         self.perform_update(serializer)
-        return Response(serializer.data)
+        
+        # Устанавливаем заголовок Content-Type
+        response = Response(serializer.data)
+        response['Content-Type'] = 'application/json'
+        return response
     
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
@@ -409,4 +512,66 @@ class AdminCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
             )
         
         self.perform_destroy(instance)
-        return Response(status=status.HTTP_204_NO_CONTENT) 
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ProductImageUploadView(APIView):
+    permission_classes = [IsAdminUser]
+    parser_classes = [MultiPartParser, FormParser]
+    
+    def post(self, request):
+        if 'image' not in request.FILES:
+            return Response(
+                {'detail': 'No image file provided'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        image_file = request.FILES['image']
+        
+        try:
+            # Валидируем файл
+            validate_image_file(image_file)
+            
+            # Создаем временный UUID для файла
+            temp_uuid = str(uuid.uuid4())
+            
+            # Создаем путь к временному файлу
+            image_path = f'products/{temp_uuid}_{image_file.name}'
+            
+            # Вручную сохраняем файл в хранилище
+            from django.core.files.storage import default_storage
+            from django.core.files.base import ContentFile
+            
+            path = default_storage.save(f'media/{image_path}', ContentFile(image_file.read()))
+            
+            # Создаем запись в БД
+            product_image = ProductImage.objects.create(
+                image=image_path,
+                alt_text=image_file.name
+            )
+            
+            # Возвращаем информацию о файле в формате, совместимом с JSON
+            image_url = f'/media/{image_path}'
+            
+            # Устанавливаем заголовок Content-Type
+            response = Response({
+                'id': str(product_image.id),
+                'image': image_url,
+                'thumbnail': image_url,
+                'alt_text': image_file.name,
+                'is_feature': False,
+                'filename': image_file.name
+            }, status=status.HTTP_201_CREATED)
+            response['Content-Type'] = 'application/json'
+            return response
+            
+        except ValidationError as e:
+            return Response(
+                {'detail': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {'detail': f'Error processing image: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            ) 

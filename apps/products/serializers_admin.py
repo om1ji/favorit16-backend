@@ -1,6 +1,9 @@
 from rest_framework import serializers
 import json
 from .models import Product, Category, ProductImage, Brand
+from django.core.files.base import ContentFile
+from django.core.files.storage import default_storage
+import os
 
 
 class AdminProductImageSerializer(serializers.ModelSerializer):
@@ -405,10 +408,11 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
 class AdminCategoryUpdateSerializer(serializers.ModelSerializer):
     parent = serializers.PrimaryKeyRelatedField(queryset=Category.objects.all(), required=False, allow_null=True)
     image = serializers.CharField(required=False, allow_null=True)
+    image_id = serializers.CharField(required=False, allow_null=True, write_only=True)
     
     class Meta:
         model = Category
-        fields = ('id', 'name', 'slug', 'image', 'parent')
+        fields = ('id', 'name', 'slug', 'image', 'image_id', 'parent')
     
     def validate_image(self, value):
         """Валидируем строку с путем к изображению"""
@@ -423,6 +427,43 @@ class AdminCategoryUpdateSerializer(serializers.ModelSerializer):
             return value
             
         return value
+    
+    def validate(self, data):
+        """Дополнительная валидация для обработки image_id"""
+        # Если есть image_id, получаем изображение и используем его путь
+        if 'image_id' in data and data['image_id']:
+            from .models import ProductImage
+            try:
+                image = ProductImage.objects.get(id=data['image_id'])
+                print(f"Found image with id {data['image_id']}: {image.image.url}")
+                
+                # Получаем имя файла и копируем в директорию категорий
+                from django.core.files.base import ContentFile
+                from django.core.files.storage import default_storage
+                import os
+                
+                # Открываем исходный файл
+                image_content = image.image.read()
+                
+                # Генерируем имя файла для категории
+                filename = os.path.basename(image.image.name)
+                new_path = f'categories/{filename}'
+                
+                # Сохраняем файл в директории категорий
+                path = default_storage.save(f'media/{new_path}', ContentFile(image_content))
+                print(f"Saved category image to: {path}")
+                
+                # Устанавливаем новый путь для поля image
+                data.pop('image_id')
+                data['image'] = new_path
+                
+            except ProductImage.DoesNotExist:
+                raise serializers.ValidationError({"image_id": "Изображение с указанным ID не найдено"})
+            except Exception as e:
+                print(f"Error processing image_id: {str(e)}")
+                raise serializers.ValidationError({"image_id": f"Ошибка обработки изображения: {str(e)}"})
+                
+        return data
         
     def update(self, instance, validated_data):
         # Обновляем поля категории

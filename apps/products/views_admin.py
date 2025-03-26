@@ -116,28 +116,22 @@ class CategoryImageUploadView(APIView):
             # Валидируем файл
             validate_image_file(image_file)
             
-            # Создаем временный UUID для категории
-            temp_uuid = str(uuid.uuid4())
+            # Создаем запись ProductImage в БД
+            product_image = ProductImage.objects.create(
+                image=image_file,
+                alt_text=image_file.name
+            )
             
-            # Создаем путь к временному файлу
-            image_path = f'categories/{temp_uuid}_{image_file.name}'
+            # Получаем URL изображения с помощью сериализатора
+            request_context = {'request': request}
+            serializer = AdminProductImageSerializer(product_image, context=request_context)
             
-            # Вручную сохраняем файл в поле модели
-            from django.core.files.storage import default_storage
-            from django.core.files.base import ContentFile
-            
-            path = default_storage.save(f'media/{image_path}', ContentFile(image_file.read()))
-            
-            # Возвращаем информацию о файле в формате, совместимом с JSON
-            image_url = f'/media/{image_path}'
+            # Добавляем дополнительные поля для совместимости с предыдущей версией API
+            response_data = serializer.data.copy()
+            response_data['filename'] = image_file.name
             
             # Устанавливаем заголовок Content-Type
-            response = Response({
-                'image': image_url,
-                'filename': image_file.name,
-                # Дополнительные поля для прямого использования в категории
-                'image_path': image_url
-            }, status=status.HTTP_201_CREATED)
+            response = Response(response_data, status=status.HTTP_201_CREATED)
             response['Content-Type'] = 'application/json'
             return response
             
@@ -147,6 +141,7 @@ class CategoryImageUploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
+            print(f"Error in CategoryImageUploadView: {str(e)}")
             return Response(
                 {'detail': f'Error processing image: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -471,11 +466,14 @@ class AdminCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
         
         # Копируем данные для обработки
         data = request.data.copy()
+        print(f"Category update - request data: {data}")
         
-        # Проверяем наличие файла изображения
+        # Проверяем наличие файла изображения или поля image_id
         if 'image' in request.FILES:
             # Файл уже включен в data через request.data, дополнительная обработка не требуется
             print(f"Received image file: {request.FILES['image'].name}")
+        elif 'image_id' in data:
+            print(f"Received image_id: {data['image_id']}")
         
         # Передаем контекст запроса в сериализатор
         context = self.get_serializer_context()
@@ -483,11 +481,13 @@ class AdminCategoryDetailView(generics.RetrieveUpdateDestroyAPIView):
         
         try:
             serializer.is_valid(raise_exception=True)
+            print(f"Category update - validated data: {serializer.validated_data}")
         except serializers.ValidationError as e:
             print(f"Category update - validation error: {e}")
             return Response(e.detail, status=status.HTTP_400_BAD_REQUEST)
             
         self.perform_update(serializer)
+        print(f"Category update - instance after update: {serializer.instance.image}")
         
         # Устанавливаем заголовок Content-Type
         response = Response(serializer.data)
@@ -532,36 +532,18 @@ class ProductImageUploadView(APIView):
             # Валидируем файл
             validate_image_file(image_file)
             
-            # Создаем временный UUID для файла
-            temp_uuid = str(uuid.uuid4())
-            
-            # Создаем путь к временному файлу
-            image_path = f'products/{temp_uuid}_{image_file.name}'
-            
-            # Вручную сохраняем файл в хранилище
-            from django.core.files.storage import default_storage
-            from django.core.files.base import ContentFile
-            
-            path = default_storage.save(f'media/{image_path}', ContentFile(image_file.read()))
-            
-            # Создаем запись в БД
+            # Создаем запись в БД непосредственно с файлом изображения
             product_image = ProductImage.objects.create(
-                image=image_path,
+                image=image_file,
                 alt_text=image_file.name
             )
             
-            # Возвращаем информацию о файле в формате, совместимом с JSON
-            image_url = f'/media/{image_path}'
+            # Получаем URL изображения
+            request_context = {'request': request}
+            serializer = AdminProductImageSerializer(product_image, context=request_context)
             
             # Устанавливаем заголовок Content-Type
-            response = Response({
-                'id': str(product_image.id),
-                'image': image_url,
-                'thumbnail': image_url,
-                'alt_text': image_file.name,
-                'is_feature': False,
-                'filename': image_file.name
-            }, status=status.HTTP_201_CREATED)
+            response = Response(serializer.data, status=status.HTTP_201_CREATED)
             response['Content-Type'] = 'application/json'
             return response
             
@@ -571,6 +553,7 @@ class ProductImageUploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         except Exception as e:
+            print(f"Error in ProductImageUploadView: {str(e)}")
             return Response(
                 {'detail': f'Error processing image: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR

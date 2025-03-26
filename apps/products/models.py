@@ -62,7 +62,7 @@ class ProductImage(models.Model):
 class Product(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(_('name'), max_length=255)
-    description = models.TextField(_('description'))
+    description = models.TextField(_('description'), blank=True, null=True)
     price = models.DecimalField(_('price'), max_digits=10, decimal_places=2,
                               validators=[MinValueValidator(0)])
     old_price = models.DecimalField(_('old price'), max_digits=10, decimal_places=2,

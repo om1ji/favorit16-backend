@@ -5,13 +5,23 @@ from .models import Product, Category, ProductImage, Brand
 
 class AdminProductImageSerializer(serializers.ModelSerializer):
     thumbnail = serializers.SerializerMethodField()
+    image = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductImage
         fields = ('id', 'image', 'thumbnail', 'alt_text', 'is_feature')
 
+    def get_image(self, obj):
+        request = self.context.get('request')
+        if obj.image and request:
+            return request.build_absolute_uri(obj.image.url)
+        return obj.image.url if obj.image else None
+
     def get_thumbnail(self, obj):
-        return obj.image.url  # В реальном проекте здесь будет URL миниатюры
+        request = self.context.get('request')
+        if obj.image and request:
+            return request.build_absolute_uri(obj.image.url)
+        return obj.image.url if obj.image else None
 
 
 class AdminBrandSerializer(serializers.ModelSerializer):
@@ -226,9 +236,15 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
         """Валидируем данные изображений"""
         print(f"validate_images received: {value}, type: {type(value)}")
         
-        if not value:
+        if value is None:
             return []
             
+        # Если value уже список (из JSON-запроса), просто используем его
+        if isinstance(value, list):
+            print(f"Value is already a list: {value}")
+            return value
+            
+        # Если value - строка, пытаемся преобразовать в JSON
         if isinstance(value, str):
             try:
                 # Удаляем лишние пробелы и символы
@@ -250,6 +266,7 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Images must be a list")
             
         # Проверяем формат каждого изображения
+        result = []
         for img in value:
             if isinstance(img, str):
                 # Пытаемся интерпретировать строку как UUID
@@ -269,8 +286,10 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
                 
             if 'id' not in img:
                 raise serializers.ValidationError("Each image must have an id")
+            
+            result.append(img)
                 
-        return value
+        return result
     
     def update(self, instance, validated_data):
         # Обрабатываем изображения, если они переданы

@@ -5,7 +5,7 @@ from rest_framework import generics, status, filters
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAdminUser
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django_filters import rest_framework as django_filters
 from PIL import Image
 import io
@@ -83,7 +83,7 @@ class ImageUploadView(APIView):
             )
             
             # Сериализуем и возвращаем результат
-            serializer = AdminProductImageSerializer(product_image)
+            serializer = AdminProductImageSerializer(product_image, context={'request': request})
             return Response(serializer.data, status=status.HTTP_201_CREATED)
             
         except ValidationError as e:
@@ -211,7 +211,7 @@ class AdminProductListView(generics.ListCreateAPIView):
 class AdminProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Product.objects.all()
     permission_classes = [IsAdminUser]
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get_serializer_class(self):
         if self.request.method in ['PUT', 'PATCH']:
@@ -230,13 +230,19 @@ class AdminProductDetailView(generics.RetrieveUpdateDestroyAPIView):
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         
-        # Обработка данных в формате multipart/form-data
-        data = request.data.copy()
+        # Обработка данных в зависимости от типа контента
         content_type = request.content_type
         print(f"Request content-type: {content_type}")
         
-        # Если images передано как строка, преобразуем её в JSON
-        if 'images' in data:
+        # Копируем данные для модификации
+        data = request.data.copy()
+        
+        # Если Content-Type = application/json, то данные уже в формате JSON
+        if 'application/json' in content_type:
+            # Для JSON-формата нам не нужно дополнительно обрабатывать данные
+            pass
+        # Если это multipart/form-data, обрабатываем поле images
+        elif 'multipart/form-data' in content_type and 'images' in data:
             # Выводим информацию для отладки
             print(f"Images data type: {type(data['images'])}")
             print(f"Images data: {data['images']}")
@@ -246,11 +252,10 @@ class AdminProductDetailView(generics.RetrieveUpdateDestroyAPIView):
                     # Удаляем лишние пробелы
                     images_str = data['images'].strip()
                     
-                    # Если это multipart/form-data, то строка может содержать экранированные кавычки
-                    if "multipart/form-data" in content_type:
-                        images_str = images_str.replace('\\"', '"').replace("\\'", "'")
-                        if images_str.startswith('"') and images_str.endswith('"'):
-                            images_str = images_str[1:-1]  # Убираем обрамляющие кавычки
+                    # Обрабатываем экранированные кавычки
+                    images_str = images_str.replace('\\"', '"').replace("\\'", "'")
+                    if images_str.startswith('"') and images_str.endswith('"'):
+                        images_str = images_str[1:-1]  # Убираем обрамляющие кавычки
                     
                     data['images'] = json.loads(images_str)
                     print(f"Parsed images: {data['images']}")
@@ -261,7 +266,9 @@ class AdminProductDetailView(generics.RetrieveUpdateDestroyAPIView):
                         status=status.HTTP_400_BAD_REQUEST
                     )
         
-        serializer = self.get_serializer(instance, data=data, partial=partial)
+        # Передаем контекст запроса в сериализатор
+        context = self.get_serializer_context()
+        serializer = self.get_serializer(instance, data=data, partial=partial, context=context)
         
         try:
             serializer.is_valid(raise_exception=True)

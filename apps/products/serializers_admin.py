@@ -251,6 +251,13 @@ class AdminProductCreateSerializer(serializers.ModelSerializer):
                     pass
         
         return product
+        
+    def to_representation(self, instance):
+        """
+        Преобразуем объект в представление JSON.
+        Используем AdminProductDetailSerializer для полного представления.
+        """
+        return AdminProductDetailSerializer(instance, context=self.context).data
 
 
 class AdminProductDetailSerializer(serializers.ModelSerializer):

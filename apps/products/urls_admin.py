@@ -8,7 +8,11 @@ from .views_admin import (
     AdminCategoryListView,
     AdminCategorySelectView,
     AdminCategoryDetailView,
-    ProductImageUploadView
+    ProductImageUploadView,
+    AdminBrandListView,
+    ProductImageDeleteView,
+    AdminProductImageListView,
+    CleanupUnusedImagesView
 )
 
 app_name = 'products-admin'
@@ -23,4 +27,8 @@ urlpatterns = [
     path('categories/', AdminCategoryListView.as_view(), name='admin-category-list'),
     path('categories/select/', AdminCategorySelectView.as_view(), name='admin-category-select'),
     path('categories/<uuid:pk>/', AdminCategoryDetailView.as_view(), name='admin-category-detail'),
+    path('brands/', AdminBrandListView.as_view(), name='admin-brand-list'),
+    path('images/', AdminProductImageListView.as_view(), name='admin-image-list'),
+    path('images/<uuid:image_id>/delete/', ProductImageDeleteView.as_view(), name='admin-image-delete'),
+    path('images/cleanup/', CleanupUnusedImagesView.as_view(), name='admin-image-cleanup'),
 ] 

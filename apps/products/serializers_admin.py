@@ -25,9 +25,18 @@ class AdminProductImageSerializer(serializers.ModelSerializer):
 
 
 class AdminBrandSerializer(serializers.ModelSerializer):
+    category_name = serializers.CharField(source='category.name', read_only=True)
+    logo = serializers.SerializerMethodField()
+    
     class Meta:
         model = Brand
-        fields = ('id', 'name', 'logo')
+        fields = ('id', 'name', 'logo', 'category', 'category_name')
+        
+    def get_logo(self, obj):
+        request = self.context.get('request')
+        if obj.logo and request:
+            return request.build_absolute_uri(obj.logo.url)
+        return obj.logo.url if obj.logo else None
 
 
 class AdminCategorySerializer(serializers.ModelSerializer):
@@ -101,12 +110,33 @@ class AdminProductCreateSerializer(serializers.ModelSerializer):
             'description',
             'in_stock',
             'quantity',
+            # Общие поля
             'diameter',
+            # Поля для шин
             'width',
             'profile',
+            # Поля для дисков
+            'wheel_width',
+            'et_offset',
+            'pcd',
+            'bolt_count',
+            'center_bore',
+            # Изображения
             'images',
             'images_metadata'
         )
+
+    def validate(self, data):
+        """Валидация: бренд должен принадлежать той же категории, что и товар"""
+        category = data.get('category')
+        brand = data.get('brand')
+        
+        if brand and category and brand.category != category:
+            raise serializers.ValidationError({
+                'brand': 'Brand must belong to the same category as the product.'
+            })
+        
+        return data
 
     def validate_images(self, value):
         if not value:
@@ -265,6 +295,7 @@ class AdminProductDetailSerializer(serializers.ModelSerializer):
     brand = AdminBrandSerializer()
     images = AdminProductImageSerializer(many=True)
     tire_size = serializers.SerializerMethodField()
+    wheel_size = serializers.SerializerMethodField()
     
     class Meta:
         model = Product
@@ -278,10 +309,20 @@ class AdminProductDetailSerializer(serializers.ModelSerializer):
             'description',
             'in_stock',
             'quantity',
+            # Общие поля
             'diameter',
+            # Поля для шин
             'width',
             'profile',
             'tire_size',
+            # Поля для дисков
+            'wheel_width',
+            'et_offset',
+            'pcd',
+            'bolt_count',
+            'center_bore',
+            'wheel_size',
+            # Изображения
             'images'
         )
         
@@ -289,6 +330,23 @@ class AdminProductDetailSerializer(serializers.ModelSerializer):
         """Return formatted tire size (width/profile R diameter)"""
         if obj.width and obj.profile and obj.diameter:
             return f"{obj.width}/{obj.profile} R{obj.diameter}"
+        return None
+        
+    def get_wheel_size(self, obj):
+        """Return formatted wheel size (diameter x wheel_width ET offset PCD bolt_count x center_bore)"""
+        if obj.diameter and obj.wheel_width:
+            size_parts = [f"{obj.diameter}x{obj.wheel_width}"]
+            
+            if obj.et_offset is not None:
+                size_parts.append(f"ET{obj.et_offset}")
+                
+            if obj.pcd and obj.bolt_count:
+                size_parts.append(f"{obj.bolt_count}x{obj.pcd}")
+                
+            if obj.center_bore:
+                size_parts.append(f"DIA{obj.center_bore}")
+                
+            return " ".join(size_parts)
         return None
 
 
@@ -309,12 +367,41 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
             'description',
             'in_stock',
             'quantity',
+            # Общие поля
             'diameter',
+            # Поля для шин
             'width',
             'profile',
+            # Поля для дисков
+            'wheel_width',
+            'et_offset',
+            'pcd',
+            'bolt_count',
+            'center_bore',
+            # Изображения
             'images'
         )
         
+    def validate(self, data):
+        """Валидация: бренд должен принадлежать той же категории, что и товар"""
+        category = data.get('category')
+        brand = data.get('brand')
+        
+        # Если бренд не указан, валидация проходит
+        if not brand:
+            return data
+            
+        # Если категория не изменяется, берем текущую категорию из instance
+        if not category and hasattr(self, 'instance'):
+            category = self.instance.category
+            
+        if brand and category and brand.category != category:
+            raise serializers.ValidationError({
+                'brand': 'Brand must belong to the same category as the product.'
+            })
+        
+        return data
+
     def validate_images(self, value):
         """Валидируем данные изображений"""
         print(f"validate_images received: {value}, type: {type(value)}")
@@ -385,7 +472,7 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
         instance.save()
         
         # Обрабатываем изображения
-        if images_data:
+        if images_data is not None:  # Проверяем на None, а не на пустоту, чтобы обрабатывать пустые списки
             # Получаем текущие изображения продукта
             current_images = {str(image.id): image for image in instance.images.all()}
             new_image_ids = set()
@@ -428,11 +515,27 @@ class AdminProductUpdateSerializer(serializers.ModelSerializer):
                     print(f"Error with image {image_id}: {e}")
                     continue
             
-            # Удаляем привязку к изображениям, которые больше не связаны с продуктом
+            # Удаляем изображения, которые больше не связаны с продуктом
             images_to_remove = set(current_images.keys()) - new_image_ids
             if images_to_remove:
                 print(f"Removing images: {images_to_remove}")
-                ProductImage.objects.filter(id__in=images_to_remove).update(product=None)
+                images_to_delete = ProductImage.objects.filter(id__in=images_to_remove)
+                
+                # Удаляем файлы с диска и записи из БД
+                for image_to_delete in images_to_delete:
+                    print(f"Deleting image: {image_to_delete.id}, path: {image_to_delete.image.name}")
+                    
+                    # Удаляем файл с диска
+                    if image_to_delete.image:
+                        try:
+                            image_to_delete.image.delete(save=False)
+                            print(f"Deleted image file: {image_to_delete.image.name}")
+                        except Exception as e:
+                            print(f"Error deleting image file: {e}")
+                    
+                    # Удаляем запись из БД
+                    image_to_delete.delete()
+                    print(f"Deleted image record: {image_to_delete.id}")
             
             # Устанавливаем главное изображение
             if feature_image:

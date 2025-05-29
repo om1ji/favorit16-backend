@@ -19,7 +19,8 @@ from .serializers_admin import (
     AdminCategorySelectSerializer,
     AdminProductCreateSerializer,
     AdminProductUpdateSerializer,
-    AdminCategoryUpdateSerializer
+    AdminCategoryUpdateSerializer,
+    AdminBrandSerializer
 )
 from apps.ordering.models import Order, OrderItem
 import json
@@ -618,5 +619,163 @@ class ProductImageUploadView(APIView):
             print(f"Error in ProductImageUploadView: {str(e)}")
             return Response(
                 {'detail': f'Error processing image: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class AdminBrandListView(generics.ListAPIView):
+    """
+    Представление для получения списка брендов для админки.
+    Поддерживает фильтрацию по категории.
+    """
+    queryset = Brand.objects.select_related('category').all()
+    serializer_class = AdminBrandSerializer
+    permission_classes = [IsAdminUser]
+    filter_backends = [django_filters.DjangoFilterBackend]
+    filterset_fields = ['category']
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Если в параметрах запроса есть category, фильтруем по нему
+        category_id = self.request.query_params.get('category')
+        if category_id:
+            queryset = queryset.filter(category_id=category_id)
+            
+        return queryset
+
+
+class ProductImageDeleteView(APIView):
+    """
+    Представление для удаления изображений товаров.
+    """
+    permission_classes = [IsAdminUser]
+    
+    def delete(self, request, image_id):
+        try:
+            # Находим изображение по ID
+            image = ProductImage.objects.get(id=image_id)
+            
+            # Сохраняем информацию о товаре для логирования
+            product_id = image.product.id if image.product else None
+            image_path = image.image.name if image.image else None
+            
+            print(f"Deleting image {image_id}, product: {product_id}, path: {image_path}")
+            
+            # Удаляем файл с диска
+            if image.image:
+                try:
+                    image.image.delete(save=False)
+                    print(f"Deleted image file: {image_path}")
+                except Exception as e:
+                    print(f"Error deleting image file: {e}")
+            
+            # Удаляем запись из базы данных
+            image.delete()
+            print(f"Deleted image record: {image_id}")
+            
+            return Response(
+                {'detail': 'Image deleted successfully'},
+                status=status.HTTP_204_NO_CONTENT
+            )
+            
+        except ProductImage.DoesNotExist:
+            return Response(
+                {'detail': 'Image not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            print(f"Error deleting image {image_id}: {str(e)}")
+            return Response(
+                {'detail': f'Error deleting image: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class AdminProductImageListView(generics.ListAPIView):
+    """
+    Представление для получения списка всех изображений товаров.
+    Полезно для управления неиспользуемыми изображениями.
+    """
+    queryset = ProductImage.objects.all()
+    serializer_class = AdminProductImageSerializer
+    permission_classes = [IsAdminUser]
+    filter_backends = [django_filters.DjangoFilterBackend]
+    
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        
+        # Фильтр для неиспользуемых изображений
+        unused = self.request.query_params.get('unused')
+        if unused and unused.lower() == 'true':
+            queryset = queryset.filter(product__isnull=True)
+            
+        # Фильтр по товару
+        product_id = self.request.query_params.get('product')
+        if product_id:
+            queryset = queryset.filter(product_id=product_id)
+            
+        return queryset.order_by('-created_at')
+
+
+class CleanupUnusedImagesView(APIView):
+    """
+    Представление для очистки неиспользуемых изображений.
+    Удаляет все изображения, которые не привязаны к товарам или категориям.
+    """
+    permission_classes = [IsAdminUser]
+    
+    def post(self, request):
+        try:
+            # Находим все неиспользуемые изображения
+            unused_images = ProductImage.objects.filter(product__isnull=True)
+            
+            # Также проверяем изображения, которые не используются в категориях
+            # (для этого нужно проверить, не используется ли путь изображения в Category.image)
+            from .models import Category
+            used_image_paths = set()
+            
+            # Собираем все пути изображений, используемых в категориях
+            for category in Category.objects.exclude(image='').exclude(image__isnull=True):
+                if category.image:
+                    used_image_paths.add(category.image.name)
+            
+            deleted_count = 0
+            deleted_files = []
+            
+            for image in unused_images:
+                # Проверяем, не используется ли это изображение в категориях
+                if image.image and image.image.name not in used_image_paths:
+                    image_path = image.image.name
+                    image_id = str(image.id)
+                    
+                    print(f"Deleting unused image: {image_id}, path: {image_path}")
+                    
+                    # Удаляем файл с диска
+                    try:
+                        image.image.delete(save=False)
+                        print(f"Deleted image file: {image_path}")
+                    except Exception as e:
+                        print(f"Error deleting image file {image_path}: {e}")
+                    
+                    # Удаляем запись из БД
+                    image.delete()
+                    
+                    deleted_count += 1
+                    deleted_files.append({
+                        'id': image_id,
+                        'path': image_path
+                    })
+            
+            return Response({
+                'detail': f'Successfully deleted {deleted_count} unused images',
+                'deleted_count': deleted_count,
+                'deleted_files': deleted_files
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            print(f"Error during cleanup: {str(e)}")
+            return Response(
+                {'detail': f'Error during cleanup: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             ) 

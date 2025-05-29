@@ -14,6 +14,7 @@ urlpatterns = [
     # Category endpoints
     path('categories/', CategoryListView.as_view(), name='category-list'),
     path('categories/<uuid:id>/', CategoryDetailView.as_view(), name='category-detail'),
+    path('categories/<uuid:category_id>/brands/', BrandListView.as_view(), name='category-brands'),
     
     # Brand endpoints
     path('brands/', BrandListView.as_view(), name='brand-list'),
